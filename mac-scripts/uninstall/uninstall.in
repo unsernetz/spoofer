@@ -1,0 +1,119 @@
+#!/bin/sh
+## 
+## Copyright 2015-2017 The Regents of the University of California
+## All rights reserved.
+## 
+## This file is part of Spoofer.
+## 
+## Spoofer is free software: you can redistribute it and/or modify
+## it under the terms of the GNU General Public License as published by
+## the Free Software Foundation, either version 3 of the License, or
+## (at your option) any later version.
+## 
+## Spoofer is distributed in the hope that it will be useful,
+## but WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+## GNU General Public License for more details.
+## 
+## You should have received a copy of the GNU General Public License
+## along with Spoofer.  If not, see <http://www.gnu.org/licenses/>.
+## 
+
+# This uninstall script may be run by the installer of a later version of
+# Spoofer, or manually by a user.
+
+@mac_scripts_header@
+
+VOLUME="/"
+PKGID="$ORG_DOMAIN_REVERSED.spoofer.apps"
+UNINSTDIR="$APPDIR.delete"
+
+usage() {
+    cat <<EOF
+usage: $0 [options]
+Stop the Spoofer service and uninstall the app.
+options:
+  --backup           first make a backup of app and settings (but not data)
+  --delete-data      also delete Spoofer data
+  --delete-settings  also delete Spoofer settings
+  --help             display this help and exit
+EOF
+}
+
+BACKUP=0
+for opt in "$@"; do
+    case "$opt" in
+    "--backup") BACKUP=1;;
+    "--delete-data") DELETE_DATA=1;;
+    "--delete-settings") DELETE_SETTINGS=1;;
+    "--help") usage; exit 0;;
+    *) echo "illegal option '$opt'"; usage; exit 1;;
+    esac
+done
+
+if ! test -f "$APPDIR/Contents/MacOS/spoofer-scheduler"; then
+    echo "Error: '$APPDIR' does not appear to be a Spoofer application directory." >&2
+    exit $?
+fi
+
+echo "Stopping service $SERVICENAME ..."
+if launchctl list "$SERVICENAME" >/dev/null; then
+    launchctl remove "$SERVICENAME" || exit $?
+fi
+
+# make backup (AFTER stopping service)
+if test "$BACKUP" = "1"; then
+    echo "Backing up Spoofer application files ..."
+    UNINSTDIR="$BACKUPDIR"
+else
+    echo "Deleting Spoofer application files ..."
+fi
+
+APPTMP="$UNINSTDIR/appfiles"
+rm -rf "$UNINSTDIR" || exit $?
+mkdir "$UNINSTDIR" || exit $?
+if test "$BACKUP" = "1"; then
+    "$APPDIR/Contents/MacOS/spoofer-scheduler" --save-settings "$UNINSTDIR/settings.ini" || exit $?
+fi
+mv "$LAUNCHERCFG" "$UNINSTDIR/launchercfg.plist" || exit $?
+mv "$APPDIR" "$APPTMP" || exit $?
+
+if test "$BACKUP" = "1"; then
+    echo "Spoofer backup complete; it can be restored with"
+    echo "    '$APPTMP/Contents/MacOS/restore'."
+fi
+
+# delete data (before deleting settings)
+if test "$DELETE_DATA" = "1"; then
+    echo "Deleting Spoofer data files ..."
+    "$APPTMP/Contents/MacOS/spoofer-scheduler" --delete-data || exit $?
+fi
+
+# delete settings
+if test "$DELETE_SETTINGS" = "1"; then
+    echo "Deleting Spoofer settings ..."
+    "$APPTMP/Contents/MacOS/spoofer-scheduler" --delete-settings || exit $?
+fi
+
+if test "$BACKUP" != "1"; then
+    rm -rf "$UNINSTDIR" || exit $?
+fi
+
+IFS=""
+UNDELETED=""
+pkgutil --files "$PKGID" --volume "$VOLUME" | \
+while read line; do
+    f="$VOLUME/$line"
+    if test -e "$f" -a ! -d "$f"; then
+        UNDELETED=$(echo "$UNDELETED"; echo "$f")
+    fi
+done
+if test "$UNDELETED" != ""; then
+    echo "Note: the following files were not deleted: $UNDELETED"
+fi
+
+echo "Forgetting package $PKGID ..."
+pkgutil --forget "$PKGID" || exit $?
+
+echo "Spoofer uninstall complete."
+

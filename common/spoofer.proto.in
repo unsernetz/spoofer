@@ -1,0 +1,416 @@
+// 
+// Copyright 2016-2017 The Regents of the University of California
+// All rights reserved.
+// 
+// This file is part of Spoofer.
+// 
+// Spoofer is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+// 
+// Spoofer is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+// 
+// You should have received a copy of the GNU General Public License
+// along with Spoofer.  If not, see <http://www.gnu.org/licenses/>.
+//
+
+// $Id: spoofer.proto.in,v 1.25 2017/12/08 23:13:44 kkeys Exp $
+
+// Spoofer Client-Server Protocol
+//
+// Each side sends only one type of message to the other:  the server sends
+// ServerMsgs, and the client sends ClientMsgs.  All other protobuf messages
+// are embedded within those.  (The alternative of having multiple types of
+// top-level messages would be more error-prone and less extensible.)
+//
+// The session starts with a ClientMsg containing ready=true and a
+// ClientHello.  The server responds with a ServerMsg containing a ServerHello
+// and any number of ServerSchedules describing work to be done by the client.
+// The client follows with one or more ClientMsgs containing one or more
+// ClientReports describing the status of the test and the collected data; the
+// last ClientMsg contains ready=true to signal that the client has sent all
+// the reports and that the server may now send.  The server may send a
+// ServerMsg containing either another set of ServerSchedules, repeating the
+// sequence above, or a ServerResultSummary, ending the session.
+//
+//    client ->   ready=true, ClientHello
+//    <- server   ServerHello, ServerSchedule(s)
+//                [REPEAT NEXT MESSAGE 0 OR MORE TIMES]
+//    client ->   ready=false, ClientReport(s)
+//    client ->   ready=true, ClientReport(s)
+//                [WHILE SERVER HAS MORE WORK FOR CLIENT]
+//    <- server   ServerSchedule(s)
+//                [REPEAT NEXT MESSAGE 0 OR MORE TIMES]
+//    client ->   ready=false, ClientReport(s)
+//    client ->   ready=true, ClientReport(s)
+//                [END WHILE]
+//    <- server   ServerResultSummary
+//
+
+syntax = "proto2";
+@PROTOBUF_OPTIONS@
+
+// SpooferTextMessage
+//
+// May be included in any ServerMsg to send information to the user.
+// The level indicates how the client should react:
+// NOTICE: continue as normal
+// WARNING: perhaps prompt the user for confirmation before continuing
+// ERROR: abort the test session
+//
+message SpooferTextMessage
+{
+    enum Level {
+	NOTICE   = 0;
+       	WARNING  = 1;
+       	ERROR    = 2;
+    }
+    required Level   level = 1;
+    required string  body  = 2;
+}
+
+// SpooferClientMsg
+//
+// Container for client messages.
+// The ready flag signals that the client has no more reports to send, and is
+// ready to receive Schedules or the ServerResultSummary.
+//
+message SpooferClientMsg {
+    required bool                ready  = 1;
+    optional SpooferClientHello  hello  = 2; // in first message only
+    repeated SpooferClientReport report = 3; // in all but first message
+}
+
+// SpooferServerMsg
+//
+// Container for server messages.  Should be sent only after the client has
+// sent a message with ready=true.
+//
+message SpooferServerMsg {
+    optional SpooferTextMessage txtmsg      = 1;
+    optional SpooferServerHello hello       = 2; // in first message only
+    repeated SpooferServerSchedule schedule = 3; // in all but last message
+    optional SpooferResultSummary summary   = 4; // in last message only
+}
+
+enum SpooferTestType
+{
+    SPOOF         = 0;
+    TRACEFILTER   = 1;
+    TRACEROUTE    = 2;
+    SPOOFINGRESS  = 3;
+}
+
+// SpooferClientHello
+//
+// This sub-message is sent by the client to introduce themselves
+// to the server.  The client reports their version of the spoofer
+// prober, their operating system (Windows, BSD, Linux, MacOS, ...)
+// and whether or not the user consents to their collected data being
+// shared in various ways.
+//
+message SpooferClientHello
+{
+    required uint32          version      = 1;
+    required string          os           = 2;
+    required bytes           clientip     = 3; // client addr as seen by client
+    required bool            share_public = 4; // (nee "shared")
+    optional bool            share_remedy = 7;
+    optional string          sessionkey   = 5; // continue session
+    repeated SpooferTestType type         = 6;
+}
+
+// SpooferServerHello
+//
+// this message type is sent by the server to the client to respond
+// to their hello.  it reports a session ID that the client can use
+// to retrieve their results, and the client's IP address as
+// observed by the spoofer server.
+//
+message SpooferServerHello
+{
+    // There should be one WorkEstimate for each FooSchedule planned for this
+    // session, in the same order, so the client can display a meaningful
+    // progress indicator.  This should use the best information available at
+    // the time; if the actual Schedule differs from the estimate, the client
+    // will adjust.
+    message WorkEstimate
+    {
+	required SpooferTestType   type  = 1; // type of Schedule
+	required uint32            count = 2; // expected Item count for Sched
+    }
+    required fixed32      sessionid  = 1;
+    required string       sessionkey = 2;
+    optional bytes        clientip   = 3; // client addr as seen by server
+    repeated WorkEstimate work_est   = 4;
+}
+
+// SpooferServerSchedule
+//
+// this message type is sent by the server to the client to signal
+// the type of work that will follow in the next messages.  The work
+// to be done is specified in Schedules:
+//
+//  for SPOOF:        SpooferSpoofSchedule
+//  for TRACEFILTER:  SpooferTracefilterSchedule
+//  for TRACEROUTE:   SpooferTracerouteSchedule
+//  for SPOOFINGRESS: SpooferSpoofIngressSchedule
+//
+// if the server has no work for the client to do, it returns an empty
+// types list (i.e. zero items).  the server will then wait for one report
+// for each item.  the reports can be delivered out of order.
+//
+message SpooferServerSchedule
+{
+    @ONEOF@ oneof sched {
+	@ONEOF_MEMBER@ SpooferSpoofSchedule         spoof        = 1;
+	@ONEOF_MEMBER@ SpooferTracefilterSchedule   tracefilter  = 2;
+	@ONEOF_MEMBER@ SpooferTracerouteSchedule    traceroute   = 3;
+	@ONEOF_MEMBER@ SpooferSpoofIngressSchedule  spoofingress = 4;
+    @ONEOF@ }
+}
+
+// SpooferReportStatus
+//
+enum SpooferReportStatus {
+    ERROR = 0; // The test was not completed due to error.
+    DONE  = 1; // The test was completed.
+    READY = 2; // The client is ready to begin the test (for type=SPOOFINGRESS).
+}
+
+// SpooferClientReport
+//
+// This sub-message is sent by the client to the server to report the results
+// of running a test corresponding to a supplied schedule.
+//
+message SpooferClientReport
+{
+    @ONEOF@ oneof report {
+	@ONEOF_MEMBER@ SpooferSpoofReport        spoof        = 1;
+	@ONEOF_MEMBER@ SpooferTracefilterReport  tracefilter  = 2;
+	@ONEOF_MEMBER@ SpooferTracerouteReport   traceroute   = 3;
+	@ONEOF_MEMBER@ SpooferSpoofIngressReport spoofingress = 4;
+    @ONEOF@ }
+}
+
+///////////////////////
+// SPOOF //////////////
+///////////////////////
+
+// SpooferSpoofSchedule
+//
+// This sub-message is sent by the server to the client to describe
+// the packets to send to test ability to spoof.  The client may reorder
+// items within a schedule; the server may enforce an ordering by putting
+// items in separate schedules. 
+//
+message SpooferSpoofSchedule
+{
+    message Item
+    {
+	required bytes   srcip     = 1;
+	required bytes   dstip     = 2;
+	required bytes   seqno     = 3;
+	optional uint32  timestamp = 4;
+	optional bytes   hmac      = 5;
+    }
+    repeated Item item = 1;
+}
+
+// SpooferSpoofReport
+//
+// This sub-message is sent by the client once it has completed probing
+// according to the SpooferSpoofSchedule.
+//
+// Each Item describes a source/destination pair.  The Item.status field
+// indicates the best (highest valued) result of the several packets sent
+// for this item.
+//
+message SpooferSpoofReport
+{
+    message Item
+    {
+	enum Status {
+	    // ======== Version 1.3.1 and later:
+	    SENDFAIL    = 0; // error in send, or no route for spoofed pkt
+	    OK          = 1; // (obsolete as of version 1.3.1)
+	    UNCONFIRMED = 2; // sent, but not seen on the wire by the client
+			     // (because pkt was dropped by network stack, or
+			     // client was built without libpcap)
+	    REWRITTEN   = 3; // sent, but seen on wire with rewritten src addr
+	                     // (for spoofed packets only)
+	    CONFIRMED   = 4; // sent, and seen on wire with expected src addr
+	    // Async ICMP errors are ignored, since they happen in an
+	    // intermediate router, not the client host.
+	    // ======== Version 1.0.3 - 1.3.0:
+	    // The only values were SENDFAIL and OK.
+	    // SENDFAIL on nonspoofed packets meant any of:
+	    // - error in send,
+	    // - async ICMP error after send (reported by SO_ERROR, on
+	    //   BSD-based systems) were incorrectly reported as SENDFAIL.
+	    // SENDFAIL on spoofed packets meant any of:
+	    // - error in send,
+	    // - no route (for L2 or L3),
+	    // - pkt was rewritten or not confirmed (with libpcap available)
+	    // OK meant none of the above (including pkt being dropped or
+	    // rewritten if client was built without libpcap and couldn't
+	    // detect that).
+	    // ======== Version 1.0.2 and earlier:
+	    // Like 1.3.0, except that an async ICMP error after a send on BSD
+	    // was not detected til the next send, so the first send was
+	    // considered successful and the item status would depend on
+	    // whether an unmodified copy of the first pkt could be sniffed.
+	}
+	required bytes   srcip     = 1;
+	required bytes   dstip     = 2;
+	required bytes   seqno     = 3;
+	required Status  status    = 4;
+    }
+    required SpooferReportStatus status  = 1;
+    repeated Item                item    = 2;
+}
+
+/////////////////////////
+// SPOOFER TRACEFILTER //
+/////////////////////////
+
+// SpooferTracefilterSchedule
+//
+// This sub-message is sent by the server to the client to describe
+// a set of Tracefilter tests to conduct.
+//
+message SpooferTracefilterSchedule
+{
+    message Item
+    {
+	required bytes  srcip = 1;
+	required bytes  dstip = 2;
+	required uint32 dist  = 3; // range of TTL values is [1, dist]
+    }
+    repeated Item item = 1;
+}
+
+// SpooferTracefilterReport
+//
+// This sub-message is sent by the client to the server to report the outcome
+// of a tracefilter test.
+//
+message SpooferTracefilterReport
+{
+    required SpooferReportStatus  status  = 1;
+}
+
+////////////////////////
+// SPOOFER TRACEROUTE //
+////////////////////////
+
+// SpooferTracerouteSchedule
+//
+// This sub-message is sent by the server to the client to describe a
+// set of traceroutes to conduct.
+//
+message SpooferTracerouteSchedule
+{
+    message Item
+    {
+	required bytes dstip = 1;
+    }
+    repeated Item item = 1;
+}
+
+// SpooferTracerouteReport
+//
+// This sub-message is sent by the client to the server to report the outcome
+// of a sequence of requested traceroutes.
+//
+message SpooferTracerouteReport
+{
+    message Item
+    {
+	required bytes                dstip = 1;
+	optional string               text  = 2;
+	//repeated SpooferTracerouteHop hop   = 3;
+    }
+    required SpooferReportStatus  status  = 1;
+    repeated Item                 item    = 2;
+}
+
+// SpooferTracerouteHop
+//
+// This sub-message describes a response to a traceroute probe.
+//
+message SpooferTracerouteHop
+{
+    required uint32 dist = 1;
+    required bytes  addr = 2;
+    required uint32 rtt  = 3; // in milliseconds
+}
+
+/////////////////////
+// SPOOFER INGRESS //
+/////////////////////
+
+// SpooferSpoofIngressSchedule
+//
+// This sub-message is sent by the server to the client to describe a schedule
+// of incoming packets, and for how long to listen for them to arrive.
+//
+message SpooferSpoofIngressSchedule
+{
+    required uint32                  timeout = 1;
+    required bytes                   dstip   = 2;
+    repeated bytes                   srcip   = 3;
+}
+
+// SpooferSpoofIngressReport
+//
+// After receiving a SpoofIngressSchedule, the client will reply with a
+// SpoofIngressReport with status=READY and port set to indicate which port it
+// is listening on, or status=ERROR if the client failed to listen.  If status
+// was READY, the server and/or remote nodes should send probe packets
+// according to the schedule.  After the client has received the packets, or
+// the scheduled timeout has passed, the client will reply to the server with
+// a SpoofIngressReport with status=DONE and an item for each srcip from which
+// it received a packet (in no particular order).
+//
+message SpooferSpoofIngressReport
+{
+    message Item
+    {
+	optional bytes   rcvd_srcip = 1; // src addr as received in IP header
+	optional uint32  timestamp  = 2; // time (first) probe was received
+	optional bytes   payload    = 3;
+	optional uint32  count      = 4; // # of times same rcvd_srcip & payload
+    }
+    required SpooferReportStatus  status  = 1;
+    optional uint32               port    = 2; // if status == READY
+    repeated Item                 item    = 3; // if status == DONE
+}
+
+////////////////////
+// RESULT SUMMARY //
+////////////////////
+
+// SpooferResultSummary
+//
+// This sub-message is sent by the server to the client to give summary
+// information for the test session, and indicates that the session is over.
+//
+message SpooferResultSummary
+{
+    enum Result {
+	UNKNOWN   = 0; // normal pkts not rcvd or spoofed pkts not sent
+	RECEIVED  = 1; // spoofed pkts rcvd with addr intact
+	BLOCKED   = 2; // spoofed pkts sent but not rcvd
+	REWRITTEN = 3; // spoofed pkts rcvd with addr rewritten
+    }
+    required Result privaddr   = 1;
+    required Result routable   = 2;
+    required uint32 clientasn  = 3;
+    optional Result ingress_privaddr   = 4;
+    optional Result ingress_internal   = 5;
+}

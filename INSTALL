@@ -1,0 +1,188 @@
+
+IP Spoofing Tester v1.0 (http://spoofer.caida.org/)
+Installation
+====================================================
+
+Windows
+
+    * Binary installer (Spoofer-X.Y.Z-win32.exe)
+      This is the easiest method.  It will uninstall any previous version,
+      install all components, set up the Scheduler as a Windows Service, and
+      optionally configure it for automatic testing and start the GUI.
+
+      Spoofer can be uninstalled via the standard Windows "Uninstall a Program"
+      control panel, or by the "uninstall" program in the spoofer application
+      directory.  Either method will terminate the Spoofer Scheduler service.
+
+    * Or, build from source (spoofer-X.Y.tar.gz)
+      The code is designed to be cross-compiled for Windows on a UNIX-like
+      platform using the mingw32 gcc compiler, but should also work with
+      mingw32 gcc directly on a Windows platform.  You will also need:
+
+      - a WinPcap developer pack (WpdPack) from http://www.winpcap.org/.
+	If you are not going to build the Spoofer installer, WinPcap must be
+	installed on the Windows host.  If you are going to build the
+	Spoofer installer, you should place the WinPcap installer in the
+	spoofer-X.Y.Z/win-bin directory on the build platform before building
+	the Spoofer installer.
+
+      For the optional Manager component, you will also need:
+
+      - MXE (http://mxe.cc/) - includes static Qt libraries and a mingw32 gcc
+	compiler configured to use them.  (If you are not cross-compiling, you
+	may also be able to use dynamic Qt libraries and a non-MXE version of
+	mingw32 gcc, but I haven't tested this.)
+
+      To cross-compile for Windows from a UNIX-like system, add the MXE
+      tool directory to your PATH, and type:
+
+	  ./configure --host=i686-w64-mingw32.static
+	  make
+
+      If building on Windows (not cross-compiling), omit the --host option
+      to configure.
+
+      This method will not install the Scheduler as a Windows Service.
+      You have two choices for running spoofer:
+      - Preferred method:  start the Scheduler manually with
+	"spoofer-scheduler --detach", and optionally run "spoofer-gui" or
+	"spoofer-cli" to monitor it.
+      - Periodically run the Prober manually with "spoofer-prober".
+
+      To install the Scheduler as a Windows Service, you must build
+      and run an installer.  First, you must obtain NSIS from
+      http://nsis.sourceforge.net/.  After building Spoofer as
+      described above, you can build the installer with "make
+      windist-unsigned".
+
+Mac OSX
+
+    * Binary installer (Spoofer-X.Y.Z-macosx.pkg)
+      This is the easiest method.  It will uninstall any previous version,
+      install all components, set up the Scheduler as a Launch Daemon, and
+      optionally configure it for automatic testing and start the GUI.
+
+      Spoofer can be uninstalled by deleting /Applications/Spoofer.app (e.g.
+      by dragging it to the trash), or by running "/Applications/Spoofer.app/
+      Contents/MacOS/uninstall".  Either method will terminate the Spoofer
+      Scheduler service.
+
+    * Or, build from source (spoofer-X.Y.Z.tar.gz)
+      See the instructions below for UNIX-like systems.
+      To install the Scheduler as a Launch Daemon, skip the "make install"
+      step, and instead build an installer with "make macdist-unsigned", and
+      then run the installer.
+
+UNIX-like systems
+
+    * Build from source (spoofer-X.Y.Z.tar.gz)
+
+      You will need a C++ compiler that supports at least C++11 (e.g.,
+      g++ 4.8.1 or later) and "make", plus the following packages:
+
+      - libpcap (http://www.tcpdump.org/), which is already installed on many
+	UNIX-like systems.  Need library and headers.
+
+      - Google Protobuf (https://github.com/google/protobuf) version 2.6 or
+	later is preferred, but 2.4 and 2.5 also work; earlier versions may
+	work, but have not been tested.  Need protobuf compiler (protoc),
+	libraries (libprotobuf-lite or libprotobuf), and headers.
+
+      - OpenSSL (https://www.openssl.org/) version 1.0.2 or later.  Need
+	library and headers.
+
+      - Qt (http://qt.io/) version 5.2 or later (unless you plan to build
+	without the optional Manager component).  Need libraries, headers, and
+	the "qmake" development tool.
+
+      - Scamper (http://www.caida.org/tools/measurement/scamper/) or
+	Traceroute (installed by default or readily available on most
+	systems).  Scamper is preferred.
+
+      The above dependencies are known to be available from the package
+      management systems on some platforms:
+
+      - Debian Linux and Ubuntu Linux 14.04+:
+        build-essential
+        libpcap0.8-dev
+	libprotobuf-dev
+	protobuf-compiler
+	libssl-dev
+	qtbase5-dev
+	scamper or traceroute
+
+      - Red Hat Linux:
+        libpcap-devel
+	protobuf-lite-devel or protobuf-devel
+	openssl ?
+	qt5-qtbase
+	scamper or traceroute
+
+      - Fedora Linux:
+        libpcap-devel
+	protobuf-compiler
+	protobuf-lite-devel or protobuf-devel
+	openssl
+	qt5-qttools-devel (or qt5-tools-devel?)
+	scamper or traceroute
+
+      Note: on systems with both clang++/libc++ and g++/libstdc++, make
+      sure spoofer and all libraries listed above are built with the
+      same compiler and standard library.  On FreeBSD and OSX, spoofer's
+      configure will prefer clang++ to match the platform's default.
+      Any libraries installed via the platform's package system can also
+      be expected to use the platform's default, but manual installation
+      may require explicitly setting CXX.  A mismatch in compilers may
+      result in many linking errors involving std::string (among others).
+
+      Commands:
+	tar zxf spoofer-X.Y.Z.tar.gz
+	cd spoofer-X.Y.Z
+	./configure
+	make
+	sudo make install
+
+      The spoofer prober will use scamper, if available, to trace network
+      routes.  Spoofer will look for scamper in the following locations:
+      - the path specified by the --with-scamper=PATH option to configure
+      - "scamper" (unix-like) or "scamper.exe" (windows) in the same directory
+        as the spoofer prober
+      - /usr/local/bin/scamper (unix-like)
+      If spoofer can not find scamper in any these locations, it will use the
+      platform's native traceroute.
+
+      If you built the Manager:
+
+        * Customize the configuration:
+	  You should run spoofer-scheduler with the --init option to set the
+	  values for any of the following persistent options to be used in
+	  future runs:  --share-public (required), --share-remedy (required),
+	  --datadir (optional), --paused (optional).  Just be sure to run it
+	  with the same user and environment you plan to run it with normally,
+	  so it can access the same settings storage (or use the --settings
+	  option explicily).  E.g., if you plan to run it as root from a boot
+	  script, you can initialize like this:
+
+	    sudo su -c "/usr/local/bin/spoofer-scheduler --init \
+		--datadir /my/spoofer/data --share-public=1 --share-remedy=1"
+
+	  If required settings are not set, the scheduler will not run a
+	  prober until they are set, either with --init as described above, or
+	  via spoofer-gui or spoofer-cli.
+
+	* Start the scheduler:
+	  Run "spoofer-scheduler --daemon" in a system boot script (preferred)
+	  or manually.
+	  
+	* Manage or monitor the scheduler (optional):
+	  Run "spoofer-gui" or "spoofer-cli" to see prober results or manage
+	  the scheduler, including setting any of the required settings that
+	  you did not set with spoofer-scheduler --init above.
+
+      If you did not build the Manager:
+      
+	* You can periodically run "spoofer-prober" manually or with a weekly
+	  cronjob.
+
+--
+$Id: INSTALL,v 1.22 2017/10/18 21:31:16 kkeys Exp $

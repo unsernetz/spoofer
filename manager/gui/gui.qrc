@@ -1,0 +1,10 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource>
+    <file>../../icons/spoofer16.png</file>
+    <file>../../icons/spoofer32.png</file>
+    <file>../../icons/spoofer48.png</file>
+    <file>../../icons/spoofer64.png</file>
+    <file>../../icons/spoofer128.png</file>
+    <file>../../icons/spoofer256.png</file>
+</qresource>
+</RCC>

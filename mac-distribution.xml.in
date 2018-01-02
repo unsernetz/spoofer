@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!--
+  Copyright 2015-2017 The Regents of the University of California
+  All rights reserved.
+  
+  This file is part of Spoofer.
+  
+  Spoofer is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+  
+  Spoofer is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+  
+  You should have received a copy of the GNU General Public License
+  along with Spoofer.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<installer-gui-script minSpecVersion="1">
+    <title>Spoofer</title>
+    <organization>org.caida</organization>
+    <volume-check script="true">
+	<allowed-os-versions>
+	    <os-version min="@MACOSX_DEPLOYMENT_TARGET@" />
+	</allowed-os-versions>
+    </volume-check>
+    <!-- The <domains> element is buggy (even Apple doesn't use it), so we use
+         these deprecated features instead:
+	 <options rootVolumeOnly=true>
+	 <pkg-ref auth=root>
+	 -->
+    <!-- <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/> -->
+    <options
+	customize="always"
+	require-scripts="false"
+	rootVolumeOnly="true"
+    />
+    <!-- Define documents displayed at various steps -->
+    <!-- welcome    file="welcome.html"    mime-type="text/html" / -->
+    <license    file="LICENSE"         mime-type="text/plain" />
+    <readme     file="README"          mime-type="text/plain" />
+    <!-- conclusion file="conclusion.txt"  mime-type="text/plain" / -->
+    <!-- Define component packages -->
+    <pkg-ref id="org.caida.spoofer.apps"
+             auth="root">apps.pkg</pkg-ref>
+    <pkg-ref id="org.caida.spoofer.apps">
+	<must-close><app id="org.caida.spoofer"/></must-close>
+    </pkg-ref>
+    <pkg-ref id="org.caida.spoofer.start-now"
+             auth="root">start-now.pkg</pkg-ref>
+    <pkg-ref id="org.caida.spoofer.start-gui"
+             auth="root">start-gui.pkg</pkg-ref>
+    <!-- Hierarchical menu of choices presented to the user -->
+    <choices-outline>
+        <line choice="org.caida.spoofer.apps"/>
+	<line choice="org.caida.spoofer.start-now"/>
+	<line choice="org.caida.spoofer.start-gui"/>
+    </choices-outline>
+    <!-- Define menu choices -->
+    <choice
+        id="org.caida.spoofer.apps"
+        title="Spoofer"
+        description="Install Spoofer prober and manager software."
+        start_enabled="false"
+        start_visible="true"
+        start_selected="true">
+	    <pkg-ref id="org.caida.spoofer.apps"/>
+    </choice>
+    <choice
+        id="org.caida.spoofer.start-now"
+        title="Start Scheduler"
+        description="Start the Spoofer Scheduler service after installation.  (If this is a first-time installation, the scheduler will not start any prober test runs until required settings have been set.)"
+        start_enabled="false"
+        start_visible="true"
+        start_selected="true">
+	    <pkg-ref id="org.caida.spoofer.start-now"/>
+    </choice>
+    <choice
+        id="org.caida.spoofer.start-gui"
+        title="Start GUI"
+        description="Start the Spoofer GUI after installation.  The GUI will allow editing settings and manually starting prober tests."
+        start_enabled="false"
+        start_visible="false"
+        start_selected="true">
+	    <pkg-ref id="org.caida.spoofer.start-gui"/>
+    </choice>
+</installer-gui-script>

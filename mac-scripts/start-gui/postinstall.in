@@ -1,0 +1,47 @@
+#!/bin/sh
+## 
+## Copyright 2015-2017 The Regents of the University of California
+## All rights reserved.
+## 
+## This file is part of Spoofer.
+## 
+## Spoofer is free software: you can redistribute it and/or modify
+## it under the terms of the GNU General Public License as published by
+## the Free Software Foundation, either version 3 of the License, or
+## (at your option) any later version.
+## 
+## Spoofer is distributed in the hope that it will be useful,
+## but WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+## GNU General Public License for more details.
+## 
+## You should have received a copy of the GNU General Public License
+## along with Spoofer.  If not, see <http://www.gnu.org/licenses/>.
+## 
+
+# start-now must be a separate pseudo-package so this script can be run after
+# all other pseudo-package postinstall scripts.
+
+@mac_scripts_header@
+
+#### start manager gui (if interactive)
+if test "$COMMAND_LINE_INSTALL" != "1"; then
+
+    if "$APPDIR/Contents/MacOS/spoofer-scheduler" --check-settings; then
+	SCRIPT='tell app "System Events" to display alert "Start Spoofer GUI?" message "The GUI will allow editing settings and manually starting prober tests, but by default the scheduler will periodically run automatic prober tests even without the GUI." buttons {"Cancel", "OK"} cancel button 1'
+    else
+	SCRIPT='tell app "System Events" to display alert "Spoofer installation successful." message "The Spoofer GUI will now be started so you can set required settings."'
+    fi
+
+    {
+	if osascript -e "$SCRIPT" >/dev/null 2>&1; then
+	    open $APPDIR || error_dialog "Error starting spoofer-gui."
+	    # error is not fatal
+	fi
+    }
+    # It'd be nice to run the block above in the background so it doesn't
+    # block the installer, but then the gui seems to run in some kind of
+    # different context that messes up the app menu and who knows what else.
+fi
+
+exit 0; # success

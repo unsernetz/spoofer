@@ -1,0 +1,57 @@
+#!/bin/sh
+## 
+## Copyright 2015-2017 The Regents of the University of California
+## All rights reserved.
+## 
+## This file is part of Spoofer.
+## 
+## Spoofer is free software: you can redistribute it and/or modify
+## it under the terms of the GNU General Public License as published by
+## the Free Software Foundation, either version 3 of the License, or
+## (at your option) any later version.
+## 
+## Spoofer is distributed in the hope that it will be useful,
+## but WITHOUT ANY WARRANTY; without even the implied warranty of
+## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+## GNU General Public License for more details.
+## 
+## You should have received a copy of the GNU General Public License
+## along with Spoofer.  If not, see <http://www.gnu.org/licenses/>.
+## 
+
+# Note: Installer apparently updates the package receipt database as its last
+# step.  So if Installer fails at any point, the receipt db still describes
+# the previous installation, and we do not need to restore that when restoring
+# files and settings.  (OTOH, we should clean up the receipt db if user chooses
+# not to restore.)
+
+APPDIR="$DSTROOT/Applications/Spoofer.app"
+BACKUPDIR="$APPDIR.backup"
+ORG_DOMAIN_REVERSED="@ORG_DOMAIN_REVERSED@"
+SERVICENAME="$ORG_DOMAIN_REVERSED.spoofer-scheduler"
+LAUNCHERCFG="$DSTROOT/Library/LaunchDaemons/$SERVICENAME.plist"
+
+error_dialog() {
+    MESSAGE="$1"
+    if test -f "/var/log/install.log"; then
+	MESSAGE=$(echo "$MESSAGE"; echo; echo "See /var/log/install.log for more information.")
+    fi
+    echo "$MESSAGE" >&2
+    osascript -e 'on run argv' -e 'tell app "System Events" to display dialog (item 1 of argv) buttons "OK" with title "Spoofer installer error" with icon 0' -e 'end' "$MESSAGE" >/dev/null 2>&1
+    # "icon 0" is the stop icon.  "icon stop" does not work in all versions.
+    # "giving up after 60"
+}
+
+fatal() {
+    error_dialog "$*"
+    if test -x "$BACKUPDIR/appfiles/Contents/MacOS/restore"; then
+	VERSION=$("$BACKUPDIR/appfiles/Contents/MacOS/spoofer-prober" --version | sed -ne '/.*Spoof.*version /s///p')
+	MESSAGE="Restore previous version $(VERSION)?"
+	echo "$MESSAGE" >&2
+	if osascript -e 'on run argv' -e 'tell app "System Events" to display dialog (item 1 of argv) with title "Spoofer installer" with icon 2' -e 'end' "$MESSAGE" >/dev/null 2>&1; then
+	    "$BACKUPDIR/appfiles/Contents/MacOS/restore"
+	fi
+    fi
+    exit 1
+}
+

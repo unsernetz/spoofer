@@ -1,0 +1,771 @@
+; 
+; Copyright 2015-2017 The Regents of the University of California
+; All rights reserved.
+; 
+; This file is part of Spoofer.
+; 
+; Spoofer is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+; 
+; Spoofer is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+; 
+; You should have received a copy of the GNU General Public License
+; along with Spoofer.  If not, see <http://www.gnu.org/licenses/>.
+; 
+
+; $Id: spoofer.nsi.in,v 1.54 2017/03/22 01:01:48 kkeys Exp $
+
+###########################################################################
+# Usage:
+# Exactly one of these macros must be defined on the makensis command line
+# to determine which type of executable to build:
+#   INSTALL - installer;
+#   UNINSTALL - uninstaller (with "/BACKUP" option to make a backup);
+#   RESTORE - restores an installed copy of spoofer from a backup.
+# Other macros:
+#   OUTFILE - filename of executable to build
+#   DISTBINS (for INSTALL only) - directory (on build host) containing all
+#     binaries to be included
+#
+# Note, we do not use NSIS's WriteUninstaller, since it would create an
+# uninstaller at install time on the user's host that we do not get a
+# chance to sign.  Instead, we abuse NSIS to create another "installer"
+# that is really an uninstaller, so that we can sign it, and include that
+# as just another file in the real installer.  However, we do have to
+# reimplement some of NSIS's uninstaller functionality.
+###########################################################################
+
+;--------------------------------
+; Defines
+!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall"
+!define MSVCR_REGKEY "@MSVCR_REGKEY@"
+!define MSVCR_INSTALLER "@MSVCR_INSTALLER@"
+!define WINPCAP_INSTALLER "@WINPCAP_INSTALLER@"
+!define WINPCAP_VERSION "@WINPCAP_VERSION@"
+!define ORG_NAME "@ORG_NAME@"
+!define PACKAGE_NAME "@PACKAGE_NAME@"
+!define PACKAGE_VERSION "@PACKAGE_VERSION@"
+!define PACKAGE_DESC "@PACKAGE_DESC@"
+!define PACKAGE_LONGDESC "@PACKAGE_LONGDESC_NSIS@"
+!define PACKAGE_URL "@PACKAGE_URL@"
+!define srcdir "@srcdir@"
+!define top_srcdir "@top_srcdir@"
+!define top_builddir "@top_builddir@"
+!define DEBUG "@DEBUG@"
+
+!define PKG_UNINST_KEY "HKLM\${UNINST_KEY}\${PACKAGE_NAME}"
+
+!if "${DEBUG}" == "1"
+SetCompress off
+!else
+SetCompressor /SOLID lzma
+!endif
+
+;--------------------------------
+; Includes
+!include "LogicLib.nsh"
+!ifdef INSTALL | UNINSTALL
+!include "MUI2.nsh"
+!endif
+!include "Sections.nsh"
+!include "FileFunc.nsh"
+!include "WordFunc.nsh"
+
+;--------------------------------
+; macros
+
+!macro ConfirmDeletion filename goto_retry
+  StrCpy $1 "0"
+  ${DoWhile} ${FileExists} "${filename}"
+    IntOp $1 $1 + 1
+    ${If} $1 > 5
+      MessageBox MB_RETRYCANCEL "One or more old files are still present: ${filename}" /SD IDCANCEL IDRETRY ${goto_retry}
+      Abort "Aborting: one or more old files still present."
+    ${EndIf}
+    DetailPrint "Waiting for file deletion ($1)"
+    Sleep 1000 ; milliseconds
+  ${Loop}
+!macroend
+
+!macro myExecToLog cmd
+  DetailPrint `Executing command: ${cmd}`
+  nsExec::ExecToLog '${cmd}'
+  Pop $0
+  DetailPrint `Command result: $0`
+  Push $0
+!macroend
+
+!macro myExecToLogOrAbort cmd abortmsg
+  DetailPrint `Executing command: ${cmd}`
+  nsExec::ExecToLog '${cmd}'
+  Pop $0
+  DetailPrint `Command result: $0`
+  ${If} "$0" != "0"
+    Abort "${abortmsg} ($0)"
+  ${Endif}
+!macroend
+
+;--------------------------------
+; Initialization
+
+!ifdef INSTALL | UNINSTALL
+  ReserveFile /plugin "InstallOptions.dll"
+!endif
+
+  InstallDir "$PROGRAMFILES\${PACKAGE_NAME}"
+!ifdef INSTALL | UNINSTALL
+  ; If a version is already installed, use its installdir
+  InstallDirRegKey HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "UninstallString"
+!endif
+
+Name "${PACKAGE_NAME}"
+!ifdef UNINSTALL
+Caption "${PACKAGE_NAME} Uninstaller"
+!endif
+
+OutFile "${OUTFILE}"
+
+RequestExecutionLevel admin
+
+!ifdef INSTALL
+VIAddVersionKey "ProductName" "${PACKAGE_NAME}"
+VIAddVersionKey "CompanyName" "${ORG_NAME}"
+VIAddVersionKey "LegalCopyright" "@COPYRIGHT@"
+VIAddVersionKey "FileDescription" "${PACKAGE_NAME} Installer"
+VIAddVersionKey "FileVersion" "${PACKAGE_VERSION}"
+VIAddVersionKey "ProductVersion" "${PACKAGE_VERSION}"
+VIProductVersion "@PRODUCT_VERSION@"
+!endif
+
+XPStyle on
+
+!ifdef UNINSTALL
+# LangString ^InstallBtn ${LANG_ENGLISH} "Uninstall"
+InstallButtonText "Uninstall"
+!endif
+
+;--------------------------------
+; Interface Settings
+!ifdef INSTALL | UNINSTALL
+    !define MUI_ICON "${top_srcdir}\icons\spoofer.ico"
+!endif
+
+!ifdef INSTALL
+    !define MUI_ABORTWARNING
+
+    !define MUI_WELCOMEPAGE_TEXT "Thank you for installing the CAIDA IP Spoofing Tester! $\r$\n$\r$\nThis wizard will guide you through the installation.$\r$\n$\r$\n$_CLICK"
+    !insertmacro MUI_PAGE_WELCOME
+
+    !insertmacro MUI_PAGE_LICENSE "${top_builddir}\LICENSE.txt"
+
+    !define MUI_COMPONENTSPAGE_SMALLDESC
+    !define MUI_COMPONENTSPAGE_TEXT_TOP "Check the options you want and uncheck the options you don't want.  Click next to continue."
+    !define MUI_COMPONENTSPAGE_TEXT_COMPLIST "Select installation options:"
+    !insertmacro MUI_PAGE_COMPONENTS
+
+    !insertmacro MUI_PAGE_DIRECTORY
+
+    Page custom ShowWinPcapPage LeaveWinPcapPage
+
+    !insertmacro MUI_PAGE_INSTFILES
+
+    Page custom ShowMyFinishPage LeaveMyFinishPage
+!endif # INSTALL
+
+!ifdef UNINSTALL
+    !define MUI_WELCOMEPAGE_TITLE "Welcome to the Spoofer Uninstall Wizard"
+    !define MUI_WELCOMEPAGE_TEXT "This wizard will guide you through the uninstallation of Spoofer.$\r$\n$\r$\nBefore proceeding, make sure Spoofer is not running.$\r$\n$\r$\n$_CLICK"
+    !insertmacro MUI_PAGE_WELCOME
+
+    !define MUI_PAGE_HEADER_TEXT "Uninstall Spoofer"
+    !define MUI_PAGE_HEADER_SUBTEXT "Remove Spoofer from your computer."
+    !define MUI_DIRECTORYPAGE_TEXT_TOP "Spoofer will be uninstalled from the following folder. $_CLICK"
+    !define MUI_DIRECTORYPAGE_TEXT_DESTINATION "Uninstall from:"
+    !insertmacro MUI_PAGE_DIRECTORY
+
+    !define MUI_PAGE_HEADER_TEXT "Choose Components"
+    !define MUI_PAGE_HEADER_SUBTEXT "Choose which features of Spoofer you want to uninstall."
+    !define MUI_COMPONENTSPAGE_NODESC
+    !define MUI_COMPONENTSPAGE_TEXT_TOP "Check the components you want to uninstall and uncheck the components you don't want to uninstall.  Click $(^InstallBtn) to start the uninstallation."
+    !define MUI_COMPONENTSPAGE_TEXT_COMPLIST "Select components to uninstall:"
+    !insertmacro MUI_PAGE_COMPONENTS
+
+    !define MUI_INSTFILESPAGE_FINISHHEADER_TEXT "Uninstallation Complete"
+    !define MUI_INSTFILESPAGE_FINISHHEADER_SUBTEXT "Spoofer has been uninstalled from your computer."
+    !insertmacro MUI_PAGE_INSTFILES
+!endif # UNINSTALL
+
+;--------------------------------
+; Languages
+!ifdef INSTALL | UNINSTALL
+    !insertmacro MUI_LANGUAGE "English"
+!endif
+
+;--------------------------------
+; Variables
+Var BACKUPDIR
+!ifdef INSTALL
+Var OLD_WINPCAP_VERSION
+Var WinPcapDialog
+Var WinPcapVersionLabel
+Var WinPcapInstallCheckbox
+Var WinPcapInstallNote
+Var WinPcapLink
+Var WINPCAP_INSTALL
+Var SIMULATE_INSTALL_ERROR
+Var SOME_FILES_INSTALLED
+Var ViewReadmeCheckbox
+Var StartGuiCheckbox
+!endif
+!ifdef INSTALL | RESTORE
+Var ALT_INSTDIR
+!endif
+!ifdef UNINSTALL | RESTORE
+Var REG
+!endif
+!ifdef UNINSTALL
+Var UNINSTDIR
+!endif
+
+;--------------------------------
+; Functions
+
+!ifdef INSTALL
+Function .onInit
+  StrCpy $SIMULATE_INSTALL_ERROR "0"
+  SetShellVarContext current
+FunctionEnd
+
+Function .onInstFailed
+  ${If} "$SOME_FILES_INSTALLED" == "1"
+    ExecWait '"$INSTDIR\uninstall.exe" /S'
+  ${EndIf}
+
+  ${If} "$BACKUPDIR" != ""
+  ${AndIf} ${FileExists} "$BACKUPDIR\restore.exe"
+    MessageBox MB_OKCANCEL "Restore previous copy of Spoofer from $BACKUPDIR?" /SD IDOK IDCANCEL lbl_cancel_restore
+    SetOutPath "$TEMP" # get out of the way
+    DetailPrint "Restoring previous copy from $BACKUPDIR ..."
+    CopyFiles "$BACKUPDIR\restore.exe" "$PLUGINSDIR"
+    ExecWait '"$PLUGINSDIR\restore.exe" /S "/D=$INSTDIR"'
+    lbl_cancel_restore:
+  ${Endif}
+FunctionEnd
+
+Function .onVerifyInstDir
+  # Refuse to install in an existing non-spoofer directory
+  IfFileExists "$INSTDIR\spoofer-prober.exe" lbl_instdir_ok
+  IfFileExists "$INSTDIR\spoofer.exe" lbl_instdir_ok
+  IfFileExists "$INSTDIR\*.*" 0 lbl_instdir_ok
+  Abort
+  lbl_instdir_ok:
+FunctionEnd
+
+Function ShowWinPcapPage
+  !insertmacro MUI_HEADER_TEXT "Install WinPcap?" "WinPcap is required."
+
+  ; Create a dialog for installing WinPcap as if it isn't already installed.
+  nsDialogs::Create 1018
+  Pop $WinPcapDialog
+  ${If} $WinPcapDialog == error
+    Abort
+  ${Endif}
+
+  ${NSD_CreateGroupBox} 0u 0u 100% 27u "Currently installed WinPcap version"
+
+  ${NSD_CreateLabel} 10u 11u 90% 8u "WinPcap is currently not installed."
+  Pop $WinPcapVersionLabel
+
+  ${NSD_CreateGroupBox} 0u 33u 100% 38u "Install"
+
+  ${NSD_CreateCheckBox} 10u 44u 90% 8u "Install WinPcap ${WINPCAP_VERSION}"
+  Pop $WinPcapInstallCheckbox
+  ${NSD_Check} $WinPcapInstallCheckbox
+
+  ${NSD_CreateLabel} 22u 55u 90% 8u "(Use Add/Remove Programs first to uninstall any undetected old WinPcap versions.)"
+  Pop $WinPcapInstallNote
+
+  ${NSD_CreateLink} 0u -20u 80u 15u "What is WinPcap?"
+  Pop $WinPcapLink
+  nsDialogs::SetUserData $WinPcapLink "http://www.winpcap.org/"
+  ${NSD_OnClick} $WinPcapLink OpenControlUserData
+
+
+  ; If WinPcap IS already installed, check its version and modify the dialog.
+  ClearErrors
+  ReadRegStr $OLD_WINPCAP_VERSION HKLM "${UNINST_KEY}\WinPcapInst" "DisplayName"
+  IfErrors lbl_winpcap_done ; if ReadRegStr failed, WinPcap is not installed
+
+  ${NSD_SetText} $WinPcapVersionLabel "$OLD_WINPCAP_VERSION"
+  ${NSD_SetText} $WinPcapInstallNote "If checked, the currently installed $OLD_WINPCAP_VERSION will be uninstalled first."
+
+  ; Convert "WinPcap x.y.z" to "x.y.z"
+  ${WordReplaceS} "$OLD_WINPCAP_VERSION" "WinPcap " "" "+" $R2
+  ; Compare.  R0=0 if equal, R0=1 if 1st is newer, R0=2 if 2nd is newer.
+  ${VersionCompare} $R2 "${WINPCAP_VERSION}" $R0
+  IntCmp $R0 2 lbl_winpcap_done ; 2nd is newer, i.e. installed wpcap is old
+  ; Installed WinPcap is >= our copy; default to not installing ours.
+  ${NSD_Uncheck} $WinPcapInstallCheckbox
+
+  lbl_winpcap_done:
+
+  nsDialogs::Show
+FunctionEnd
+
+# Execute "open" on the UserData of the control whose HWND is on the stack
+Function OpenControlUserData
+  Exch $R0 # save original R0 on stack, pop HWND of widget into R0
+  nsDialogs::GetUserData $R0
+  Pop $R0 # user data
+  ExecShell "open" "$R0"
+  Pop $R0 # restore original R0
+FunctionEnd
+
+Function LeaveWinPcapPage
+  ${NSD_GetState} $WinPcapInstallCheckbox $WINPCAP_INSTALL
+FunctionEnd
+
+Function ShowMyFinishPage
+  !insertmacro MUI_HEADER_TEXT "Installation Successful" "${PACKAGE_NAME} has been successfully installed on your computer."
+
+  ; Create a dialog
+  nsDialogs::Create 1018
+  Pop $R0
+  ${If} $R0 == error
+    Abort
+  ${Endif}
+
+  GetDlgItem $R0 $HWNDPARENT 1 # get ID of "Next" button
+  ${NSD_SetText} $R0 "Finish" # change its text
+
+  ${NSD_CreateCheckBox} 10u 11u 90% 8u "View README file?"
+  Pop $ViewReadmeCheckbox
+  ${NSD_Check} $ViewReadmeCheckbox
+
+  ${NSD_CreateCheckBox} 10u 33u 90% 8u "Start ${PACKAGE_NAME} GUI?"
+  Pop $StartGuiCheckbox
+  ${NSD_Check} $StartGuiCheckbox
+
+  !insertmacro myExecToLog '"$INSTDIR\spoofer-scheduler.exe" --check-settings'
+  Pop $R0
+  ${If} "$R0" == "0"
+  ${Else}
+    EnableWindow $StartGuiCheckbox 0 # disable
+    ${NSD_SetText} $StartGuiCheckbox "Start ${PACKAGE_NAME} GUI? (required to set missing settings)"
+  ${EndIf}
+
+  nsDialogs::Show
+FunctionEnd
+
+Function LeaveMyFinishPage
+  ${NSD_GetState} $ViewReadmeCheckbox $R0
+  ${If} $R0 == ${BST_CHECKED}
+    ExecShell "open" "$INSTDIR/README.txt"
+  ${EndIf}
+
+  ${NSD_GetState} $StartGuiCheckbox $R0
+  ${If} $R0 == ${BST_CHECKED}
+    Exec '"$INSTDIR/spoofer-gui.exe"'
+  ${EndIf}
+FunctionEnd
+
+Function .onInstSuccess
+  ${If} "$BACKUPDIR" != ""
+  ${AndIf} ${FileExists} "$BACKUPDIR"
+    RmDir /r $BACKUPDIR
+  ${Endif}
+FunctionEnd
+!endif # INSTALL
+
+!ifdef INSTALL | RESTORE
+Function InitService
+  ; Install firewall rules
+  !insertmacro myExecToLogOrAbort '"cscript.exe" /nologo "$INSTDIR\firewall.vbs" install' "Failed to install firewall rules"
+
+  ; Make sure the scheduler can be started
+  !insertmacro myExecToLogOrAbort '"$INSTDIR\spoofer-scheduler" --init' "Can not run Scheduler"
+
+  ; Install spoofer-scheduler service
+  !insertmacro myExecToLogOrAbort '"sc" create spoofer-scheduler binPath= "$INSTDIR\spoofer-scheduler.exe" depend= tcpip DisplayName= "Spoofer Scheduler"' "Install service failed"
+  !insertmacro myExecToLog `"sc" description spoofer-scheduler "${PACKAGE_LONGDESC}  Visit ${PACKAGE_URL} for more information."`
+  Pop $0 ; ignore result
+
+  ; Configure scheduler service to run automatically
+  !insertmacro myExecToLogOrAbort '"sc" config spoofer-scheduler start= auto' "Configure service failed"
+
+  ; Start the scheduler service
+  !insertmacro myExecToLogOrAbort '"sc" start spoofer-scheduler' "Start service failed"
+FunctionEnd ; InitService
+
+Function CreateShortcuts
+  # When 64-bit Windows creates a link, it replaces "C:\Program Files (x86)"
+  # in the icon file with "%ProgramFiles%", but later expands that to just
+  # "C:\Program Files", and can't find the right icon.  We hack around that by
+  # rewriting it to a form that Windows won't recognize and replace.
+  ${WordReplace} "$INSTDIR" ":\Program Files" ":\.\Program Files" "+1" $ALT_INSTDIR
+
+  ReadINIStr $0 "$INSTDIR\shortcuts.ini" gui startmenu
+  ${If} "$0" != ""
+  CreateShortCut "$0" "$INSTDIR\spoofer-gui.exe" "" "$ALT_INSTDIR\spoofer-gui.exe" 0 "" "" "${PACKAGE_DESC}"
+  ${EndIf}
+
+  ReadINIStr $0 "$INSTDIR\shortcuts.ini" gui desktop
+  ${If} "$0" != ""
+  CreateShortCut "$0" "$INSTDIR\spoofer-gui.exe" "" "$ALT_INSTDIR\spoofer-gui.exe" 0 "" "" "${PACKAGE_DESC}"
+  ${EndIf}
+FunctionEnd ; CreateShortcuts
+!endif # INSTALL | RESTORE
+
+!ifdef UNINSTALL | RESTORE
+Function FindReg
+  ; On a 64-bit system, we must use the 32-bit version of REG
+  ExpandEnvStrings $REG "%SystemRoot%\SysWOW64\reg.exe"
+  ${IfNot} ${FileExists} "$REG"
+    ; Otherwise, use the standard version of REG
+    ExpandEnvStrings $REG "%SystemRoot%\System32\reg.exe"
+  ${EndIf}
+FunctionEnd ; FindReg
+!endif # UNINSTALL | RESTORE
+
+!ifdef UNINSTALL
+Function RemoveShortcuts
+  ReadINIStr $0 "$INSTDIR\shortcuts.ini" gui startmenu
+  ${If} "$0" != ""
+  Delete "$0"
+  ${EndIf}
+
+  ReadINIStr $0 "$INSTDIR\shortcuts.ini" gui desktop
+  ${If} "$0" != ""
+  Delete "$0"
+  ${EndIf}
+FunctionEnd
+
+Function .onInit
+  StrCpy $UNINSTDIR "$INSTDIR.delete"
+
+  SetOutPath "$TEMP" # get out of the way
+
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} "$R0" "/NOCOPY" $R1
+  ${If} ${Errors} ; if "/NOCOPY" was NOT found
+    ; Execute a copy of the uninstaller and exit (so this one can be deleted).
+    ; However, the exit status will not indicate the result of the child.
+    SetSilent silent
+    InitPluginsDir
+    CopyFiles "$INSTDIR\uninstall.exe" "$PLUGINSDIR"
+    Exec '"$PLUGINSDIR\uninstall.exe" /NOCOPY $R0'
+    Quit
+  ${EndIf}
+
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} "$R0" "/BACKUP" $R1
+  ${IfNot} ${Errors} ; if "/BACKUP" was found
+    StrCpy $BACKUPDIR "$INSTDIR.backup"
+    StrCpy $UNINSTDIR $BACKUPDIR
+  ${EndIf}
+
+  Call SetUninstallerSize
+FunctionEnd
+!endif # UNINSTALL
+
+;--------------------------------
+; Install Sections
+
+!ifdef INSTALL
+
+!if "${DEBUG}" == "1"
+Section /o "Simulate installation error"
+  StrCpy $SIMULATE_INSTALL_ERROR "1"
+  DetailPrint "SIMULATE_INSTALL_ERROR = $SIMULATE_INSTALL_ERROR"
+SectionEnd
+!endif
+
+Section "Install Spoofer (required)" mainsection
+  SectionIn RO
+
+  InitPluginsDir
+
+  ; Silently uninstall old version of Spoofer
+  lbl_uninstall_old:
+  ${If} ${FileExists} "$INSTDIR\uninstall.exe"
+    DetailPrint "Uninstalling old instance ..."
+
+    ${If} ${FileExists} "$INSTDIR\restore.exe"
+      ; Make copy of old uninstaller (>=1.2.0), and call it with /NOCOPY so it
+      ; returns a meaningful exit status, and /BACKUP so it keeps a backup.
+      CopyFiles "$INSTDIR\uninstall.exe" "$PLUGINSDIR"
+      ExecWait '"$PLUGINSDIR\uninstall.exe" /NOCOPY /S /BACKUP' $0
+      StrCpy $BACKUPDIR "$INSTDIR.backup"
+    ${Else}
+      ; Call old uninstaller (<1.2.0) (without backup)
+      ExecWait '"$INSTDIR\uninstall.exe" /S' $0
+    ${EndIf}
+    DetailPrint "Uninstaller returned $0"
+    ${If} $0 <> 0
+      MessageBox MB_RETRYCANCEL \
+	"Failed to uninstall old version of spoofer.  Check that spoofer is not running." \
+        /SD IDCANCEL IDRETRY lbl_uninstall_old
+      Abort "Aborting: failed to uninstall old version of spoofer."
+    ${EndIf}
+  ${EndIf}
+
+  ; Uninstaller in version <= 0.8 may have deleted uninstaller but failed to
+  ; delete spoofer.exe.
+  Delete "$INSTDIR\spoofer.exe"
+
+  ; Uninstaller in version <= 1.0.4 did not indicate failure to delete in exit
+  ; status, so we must confirm deletion here.
+  !insertmacro ConfirmDeletion "$INSTDIR\spoofer*.exe" lbl_uninstall_old
+
+  ; Set output path to the installation directory (AFTER making backup)
+  SetOutPath "$INSTDIR"
+
+  ; Install files.  (Uninstaller must Delete exactly this list of files.)
+  File "${DISTBINS}\uninstall.exe" ; first, so we can use it in case of failure
+  StrCpy $SOME_FILES_INSTALLED "1"
+  File "${DISTBINS}\spoofer-prober.exe"
+  File "${DISTBINS}\spoofer-scheduler.exe"
+  File "${DISTBINS}\spoofer-gui.exe"
+  File "${DISTBINS}\spoofer-cli.exe"
+  File "${top_srcdir}\win-bin\scamper.exe"
+  File "${top_builddir}\README.txt"
+  File "${top_builddir}\THANKS.txt"
+  File "${top_builddir}\CHANGES.txt"
+  File "${top_builddir}\LICENSE.txt"
+  File "${top_srcdir}\win-bin\firewall.vbs"
+  File "${DISTBINS}\restore.exe"
+
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "DisplayName" "${PACKAGE_DESC}"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "UninstallString" "$INSTDIR\uninstall.exe"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "DisplayIcon" "$INSTDIR\uninstall.exe,0"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "Publisher" "${ORG_NAME}"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "Readme" "$INSTDIR\README.txt"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "URLInfoAbout" "${PACKAGE_URL}"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "DisplayVersion" "${PACKAGE_VERSION}"
+  WriteRegStr HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "Comments" "${PACKAGE_LONGDESC}"
+  WriteRegDWORD HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "NoModify" 1
+  WriteRegDWORD HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "NoRepair" 1
+  SectionGetSize ${mainsection} $0
+  WriteRegDWORD HKLM "${UNINST_KEY}\${PACKAGE_NAME}" "EstimatedSize" "$0"
+
+  # Install our copy of MSVCR if it is not already installed
+  ClearErrors
+  ReadRegStr $0 HKLM ${MSVCR_REGKEY} "DisplayName"
+  ${If} ${Errors}
+    File "/oname=$PLUGINSDIR\${MSVCR_INSTALLER}" "${top_srcdir}\win-bin\${MSVCR_INSTALLER}"
+    ExecWait '"$PLUGINSDIR\${MSVCR_INSTALLER}"' $0
+    DetailPrint "MSVCR installer returned $0"
+  ${Else}
+    DetailPrint "$0 is already installed"
+  ${EndIf}
+
+  ; Install WinPcap (depending on winpcap page setting)
+  ${If} $WINPCAP_INSTALL == ${BST_CHECKED}
+    File "/oname=$PLUGINSDIR\${WINPCAP_INSTALLER}" "${top_srcdir}\win-bin\${WINPCAP_INSTALLER}"
+    ExecWait '"$PLUGINSDIR\${WINPCAP_INSTALLER}"' $0
+    DetailPrint "WinPcap installer returned $0"
+  ${EndIf}
+
+  ${If} $SIMULATE_INSTALL_ERROR == "1"
+      Abort "Aborting: Failed to initialize service (simulated)"
+  ${EndIf}
+
+  Call InitService
+
+SectionEnd
+
+SectionGroup "Create Windows start items" sec_start_items
+
+Section "Create checked start items for all users" sec_start_items_all
+  SetShellVarContext all
+SectionEnd
+
+Section "Create Start Menu shortcut" sec_startmenu
+  WriteINIStr "$INSTDIR\shortcuts.ini" gui startmenu "$SMPROGRAMS\Spoofer Manager GUI.lnk"
+SectionEnd
+
+Section "Create Desktop icon" sec_desktop
+  WriteINIStr "$INSTDIR\shortcuts.ini" gui desktop "$DESKTOP\Spoofer Manager GUI.lnk"
+SectionEnd
+
+SectionGroupEnd
+
+Section "-CreateShortcuts"
+  Call CreateShortcuts
+SectionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${mainsection} "Install the ${PACKAGE_DESC} software."
+  !insertmacro MUI_DESCRIPTION_TEXT ${sec_start_items} ""
+  !insertmacro MUI_DESCRIPTION_TEXT ${sec_start_items_all} "Create the checked start items below for all users, not just for yourself."
+  !insertmacro MUI_DESCRIPTION_TEXT ${sec_startmenu} ""
+  !insertmacro MUI_DESCRIPTION_TEXT ${sec_desktop} ""
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+!endif # INSTALL
+
+
+;--------------------------------
+; Restore Sections
+; restore.exe must be called with the "/D=INSTDIR" option, using a copy of
+; restore.exe that lives outside BACKUPDIR or INSTDIR.
+
+!ifdef RESTORE
+Section "Restore Spoofer (required)" mainsection
+  SectionIn RO
+  SetOutPath "$TEMP" # get out of the way 
+  StrCpy $BACKUPDIR "$INSTDIR.backup"
+
+  ${IfNot} ${FileExists} "$BACKUPDIR\spoofer-scheduler.exe"
+    Abort "Missing $BACKUPDIR"
+  ${EndIf}
+
+  RmDir /r "$INSTDIR"
+  ClearErrors
+  Rename "$BACKUPDIR" "$INSTDIR"
+  ${If} ${Errors}
+    Abort "Failed to rename $BACKUPDIR to $INSTDIR"
+  ${EndIf}
+
+  Call FindReg
+  !insertmacro myExecToLogOrAbort '"$INSTDIR\spoofer-scheduler.exe" --restore-settings "$INSTDIR\settings.ini"' \
+    "Failed to restore settings"
+  !insertmacro myExecToLogOrAbort '"$REG" ADD "${PKG_UNINST_KEY}" /f' \
+    "Failed to add ${PKG_UNINST_KEY}"
+  !insertmacro myExecToLogOrAbort '"$REG" RESTORE "${PKG_UNINST_KEY}" "$INSTDIR\uninst.hiv"' \
+    "Failed to restore ${PKG_UNINST_KEY}"
+
+  DetailPrint "InitService..."
+  Call InitService
+  DetailPrint "CreateShortcuts..."
+  Call CreateShortcuts
+
+  ${If} ${Errors}
+    Abort
+  ${EndIf}
+
+  Delete "$INSTDIR\settings.ini"
+  Delete "$INSTDIR\uninst.hiv"
+SectionEnd
+!endif # RESTORE
+
+
+;--------------------------------
+; Uninstaller Sections
+!ifdef UNINSTALL
+Section "-StopService"
+  ; Stop Scheduler service first so it doesn't block settings or delete/rename
+  !insertmacro myExecToLog '"sc" stop spoofer-scheduler'
+  Pop $0 ; ignore result
+SectionEnd
+
+Section "-Rename INSTDIR"
+  # Rename INSTDIR to UNINSTDIR.  Even if we are not making a backup, this is
+  # a convenient way to test all files at once: if any are in use, rename will
+  # fail, and we need only restart the Scheduler to restore Spoofer to its
+  # original state.  This uninstaller must not be in INSTDIR.
+
+  RmDir /r "$UNINSTDIR"
+  lbl_retry_rename:
+  ClearErrors
+  Rename "$INSTDIR" "$UNINSTDIR"
+  ${If} ${Errors}
+    MessageBox MB_RETRYCANCEL \
+	"One or more files in $INSTDIR could not be deleted.  Check that spoofer is not running." \
+	/SD IDCANCEL IDRETRY lbl_retry_rename
+    ; Restart the scheduler that we stopped
+    !insertmacro myExecToLog '"sc" start spoofer-scheduler'
+    Abort "Aborting: One or more spoofer files in $INSTDIR could not be deleted."
+  ${EndIf}
+SectionEnd
+
+Section "-Backup Spoofer application and settings (but not data)"
+  # If called with "/BACKUP", we back up other essential info into $BACKUPDIR.
+  ${If} "$BACKUPDIR" != ""
+    Call FindReg
+    !insertmacro myExecToLogOrAbort \
+      '"$BACKUPDIR\spoofer-scheduler" --save-settings "$BACKUPDIR\settings.ini"' \
+      "Failed to save settings"
+    !insertmacro myExecToLogOrAbort \
+      '"$REG" SAVE "${PKG_UNINST_KEY}" "$BACKUPDIR\uninst.hiv" /y' \
+      "Failed to save uninst keys"
+  ${EndIf}
+SectionEnd
+
+Section /o "Delete Spoofer data and settings" sec_uninstall_data
+  # Note: this must default to NO in a silent uninstall
+  # After optional backup
+  !insertmacro myExecToLog '"$UNINSTDIR\spoofer-scheduler" --delete-data'
+  Pop $0 ; ignore result
+  !insertmacro myExecToLog '"$UNINSTDIR\spoofer-scheduler" --delete-settings'
+  Pop $0 ; ignore result
+SectionEnd
+
+Section "Uninstall Spoofer application" sec_uninstall_app
+  ; uninstall spoofer-scheduler service
+  !insertmacro myExecToLog '"sc" delete spoofer-scheduler'
+  Pop $0 ; ignore result
+
+  ; Remove firewall rules
+  !insertmacro myExecToLog '"cscript.exe" "$UNINSTDIR\firewall.vbs" uninstall'
+  Pop $0 ; ignore result
+
+  ; Remove shortcuts
+  Call RemoveShortcuts
+
+  ${If} ${Errors}
+      DetailPrint "Error removing shortcuts"
+      ClearErrors
+  ${EndIf}
+
+  ; Remove files (if called without "/BACKUP")
+  ${If} "$BACKUPDIR" == ""
+    DetailPrint "Removing files"
+    ClearErrors
+    Delete "$UNINSTDIR\uninstall.exe"
+    Delete "$UNINSTDIR\spoofer-prober.exe"
+    Delete "$UNINSTDIR\spoofer-scheduler.exe"
+    Delete "$UNINSTDIR\spoofer-gui.exe"
+    Delete "$UNINSTDIR\spoofer-cli.exe"
+    Delete "$UNINSTDIR\scamper.exe"
+    Delete "$UNINSTDIR\README.txt"
+    Delete "$UNINSTDIR\THANKS.txt"
+    Delete "$UNINSTDIR\CHANGES.txt"
+    Delete "$UNINSTDIR\LICENSE.txt"
+    Delete "$UNINSTDIR\firewall.vbs"
+    Delete "$UNINSTDIR\restore.exe"
+    Delete "$UNINSTDIR\shortcuts.ini"
+    RmDir "$UNINSTDIR"
+  ${EndIf}
+
+  ; Remove installation registry keys
+  DeleteRegKey HKLM "${UNINST_KEY}\${PACKAGE_NAME}"
+  DeleteRegKey HKLM "Software\${PACKAGE_NAME}"
+
+SectionEnd
+
+Section /o "Uninstall WinPcap" SecWinPcap
+;-------------------------------------------
+SectionIn 2
+ReadRegStr $1 HKLM "${UNINST_KEY}\WinPcapInst" "UninstallString"
+ExecWait '$1' $0
+DetailPrint "WinPcap uninstaller returned $0"
+SectionEnd
+
+Function SetUninstallerSize
+  ${GetSize} "$INSTDIR" "/S=0K" $R0 $R1 $R2
+  SectionSetSize ${sec_uninstall_app} $R0
+
+  ReadRegStr $R0 HKLM "Software\${ORG_NAME}\${PACKAGE_NAME}" "dataDir"
+  ${GetSize} "$R0" "/S=0K" $R0 $R1 $R2
+  SectionSetSize ${sec_uninstall_data} $R0
+FunctionEnd
+
+!endif # UNINSTALL
